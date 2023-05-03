@@ -150,12 +150,17 @@ class ImageDir:
         move_files(root/'yolo', root/'train'/'labels', train_files)
         move_files(self.img_dir, root/'valid'/'images', val_files)
         move_files(root/'yolo', root/'valid'/'labels', val_files)
+        if test_files:
+            move_files(self.img_dir, root/'test'/'images', test_files)
+            move_files(root/'yolo', root/'test'/'labels', test_files)
 
     def create_voc(self):
         root = self.img_dir.parent
         train_files, val_files, test_files, _ = self.split_dataset()
         (root/'train.txt').write_lines(train_files)
         (root/'valid.txt').write_lines(val_files)
+        if test_files:
+            (root/'test.txt').write_lines(test_files)
 # ----------------------------------yolo--------------------------------------
 
 
@@ -183,10 +188,10 @@ def from_yolo(label: Label):
         w = cood[3]*label.width
         h = cood[4]*label.height
         boxes.append(Box(xmin=cood[1]*label.width-w/2,
-                              ymin=cood[2]*label.height-h/2,
-                              xmax=cood[1]*label.width+w/2,
-                              ymax=cood[2]*label.height+h/2,
-                              name=label.labels[int(cood[0])]))
+                         ymin=cood[2]*label.height-h/2,
+                         xmax=cood[1]*label.width+w/2,
+                         ymax=cood[2]*label.height+h/2,
+                         name=label.labels[int(cood[0])]))
     label.boxes = boxes
 
 # -----------------------------------voc--------------------------------------
