@@ -35,7 +35,7 @@ class Label:
         self.boxes = func(self)
 
     def cv_show(self):
-        im = self.img.copy()
+        im = cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)
         for box in self.boxes:
             cv2.rectangle(img=im,
                           pt1=(int(box.xmin), int(box.ymin)),
@@ -54,6 +54,7 @@ class Label:
         plt.show()
 
     def plt_show(self):
+        im = cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)
         for box in self.boxes:
             rect = plt.Rectangle(xy=(box.xmin, box.ymin),
                                  width=box.xmax-box.xmin,
@@ -70,13 +71,13 @@ class Label:
                      weight="light"
                      )
             plt.gca().add_patch(rect)
-        plt.imshow(self.img)
+        plt.imshow(im)
         plt.show()
 
     def viz_show(self):
         import imgviz
         viz = imgviz.instances2rgb(
-            image=self.img,
+            image=cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB),
             labels=[self.labels.index(box.name) for box in self.boxes],
             bboxes=[[box.ymin, box.xmin, box.ymax, box.xmax]
                     for box in self.boxes],
@@ -184,14 +185,14 @@ def to_yolo(label: Label):
 def from_yolo(label: Label):
     boxes = []
     for line in label.label_path.lines():
-        cood = [float(item) for item in line.strip().split()]
-        w = cood[3]*label.width
-        h = cood[4]*label.height
-        boxes.append(Box(xmin=cood[1]*label.width-w/2,
-                         ymin=cood[2]*label.height-h/2,
-                         xmax=cood[1]*label.width+w/2,
-                         ymax=cood[2]*label.height+h/2,
-                         name=label.labels[int(cood[0])]))
+        items = [float(item) for item in line.strip().split()]
+        w = items[3]*label.width
+        h = items[4]*label.height
+        boxes.append(Box(xmin=items[1]*label.width-w/2,
+                         ymin=items[2]*label.height-h/2,
+                         xmax=items[1]*label.width+w/2,
+                         ymax=items[2]*label.height+h/2,
+                         name=label.labels[int(items[0])]))
     label.boxes = boxes
 
 # -----------------------------------voc--------------------------------------
