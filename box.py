@@ -7,8 +7,8 @@ from numpy import ndarray, dtype, generic
 from itertools import chain, product
 
 
-Anchor = namedtuple(
-    "Anchor",
+Box = namedtuple(
+    "Box",
     ('xmin', 'ymin', 'xmax', 'ymax', 'name'))
 
 
@@ -20,7 +20,7 @@ class Label:
         self.root: Path = image_path.parent.parent
         self.img: ndarray[int, dtype[generic]] = cv2.imread(image_path)
         self.height, self.width, self.depth = self.img.shape
-        self.anchors: List[Anchor] = None
+        self.boxes: List[Box] = None
         self.labels: List[str] = labels
 
     def unload(self, mode='yolo'):
@@ -32,19 +32,19 @@ class Label:
         func(self)
 
     def convert(self, func):
-        self.anchors = func(self)
+        self.boxes = func(self)
 
     def cv_show(self):
         im = self.img.copy()
-        for box in self.anchors:
+        for box in self.boxes:
             cv2.rectangle(img=im,
-                          pt1=(box.xmin, box.ymin),
-                          pt2=(box.xmax, box.ymax),
+                          pt1=(int(box.xmin), int(box.ymin)),
+                          pt2=(int(box.xmax), int(box.ymax)),
                           color=(255, 0, 0),
                           thickness=2)
             cv2.putText(img=im,
                         text=box.name,
-                        org=(box.xmin, box.ymin-5),
+                        org=(int(box.xmin), int(box.ymin)-5),
                         fontFace=cv2.FONT_HERSHEY_COMPLEX,
                         fontScale=0.7,  # 字体大小
                         color=(255, 0, 0),
@@ -54,7 +54,7 @@ class Label:
         plt.show()
 
     def plt_show(self):
-        for box in self.anchors:
+        for box in self.boxes:
             rect = plt.Rectangle(xy=(box.xmin, box.ymin),
                                  width=box.xmax-box.xmin,
                                  height=box.ymax-box.ymin,
@@ -77,10 +77,10 @@ class Label:
         import imgviz
         viz = imgviz.instances2rgb(
             image=self.img,
-            labels=[self.labels.index(anchor.name) for anchor in self.anchors],
-            bboxes=[[anchor.ymin, anchor.xmin, anchor.ymax, anchor.xmax]
-                    for anchor in self.anchors],
-            captions=[anchor.name for anchor in self.anchors],
+            labels=[self.labels.index(box.name) for box in self.boxes],
+            bboxes=[[box.ymin, box.xmin, box.ymax, box.xmax]
+                    for box in self.boxes],
+            captions=[box.name for box in self.boxes],
             font_size=15,
         )
         plt.imshow(viz)
@@ -165,29 +165,29 @@ def to_yolo(label: Label):
         target.mkdir_p()
     target_path = target/f'{label.stem}.txt'
     res = []
-    for anchor in label.anchors:
-        center_x = (anchor.xmin + anchor.xmax) / 2 / label.width
-        center_y = (anchor.ymin + anchor.ymax) / 2 / label.height
-        w = (anchor.xmax - anchor.xmin) / label.width
-        h = (anchor.ymax - anchor.ymin) / label.height
-        cls = label.labels.index(anchor.name)
+    for box in label.boxes:
+        center_x = (box.xmin + box.xmax) / 2 / label.width
+        center_y = (box.ymin + box.ymax) / 2 / label.height
+        w = (box.xmax - box.xmin) / label.width
+        h = (box.ymax - box.ymin) / label.height
+        cls = label.labels.index(box.name)
         res.append(
             f"{cls:d} {center_x:<08f} {center_y:<08f} {w:<08f} {h:<08f}")
     target_path.write_lines(res)
 
 
 def from_yolo(label: Label):
-    anchors = []
+    boxes = []
     for line in label.label_path.lines():
         cood = [float(item) for item in line.strip().split()]
         w = cood[3]*label.width
         h = cood[4]*label.height
-        anchors.append(Anchor(xmin=cood[1]*label.width-w/2,
+        boxes.append(Box(xmin=cood[1]*label.width-w/2,
                               ymin=cood[2]*label.height-h/2,
                               xmax=cood[1]*label.width+w/2,
                               ymax=cood[2]*label.height+h/2,
                               name=label.labels[int(cood[0])]))
-    label.anchors = anchors
+    label.boxes = boxes
 
 # -----------------------------------voc--------------------------------------
 
@@ -216,18 +216,18 @@ def to_voc(label: Label):
         maker.segmented(),
     )
 
-    for anchor in label.anchors:
+    for box in label.boxes:
         xml.append(
             maker.object(
-                maker.name(anchor.name),
+                maker.name(box.name),
                 maker.pose(),
                 maker.truncated(),
                 maker.difficult(),
                 maker.bndbox(
-                    maker.xmin(str(anchor.xmin)),
-                    maker.ymin(str(anchor.ymin)),
-                    maker.xmax(str(anchor.xmax)),
-                    maker.ymax(str(anchor.ymax)),
+                    maker.xmin(str(box.xmin)),
+                    maker.ymin(str(box.ymin)),
+                    maker.xmax(str(box.xmax)),
+                    maker.ymax(str(box.ymax)),
                 ),
             )
         )
@@ -238,8 +238,8 @@ def from_voc(label: Label):
     import lxml.etree
     xml = lxml.etree.parse(label.label_path)
 
-    def to_anchor(x):
-        return Anchor(
+    def to_box(x):
+        return Box(
             xmin=float(x.find('bndbox').find('xmin').text),
             ymin=float(x.find('bndbox').find('ymin').text),
             xmax=float(x.find('bndbox').find('xmax').text),
@@ -247,25 +247,25 @@ def from_voc(label: Label):
             name=x.find("name").text
         )
     objects = filter(lambda o: o.getchildren(), xml.findall('object'))
-    label.anchors = [to_anchor(o) for o in objects]
+    label.boxes = [to_box(o) for o in objects]
 # ----------------------------------labelme------------------------------------
 
 
 def from_labelme(label: Label):
     import json
     data = json.loads(label.label_path.read_text())
-    anchors = []
+    boxes = []
     for shape in data["shapes"]:
         points = shape['points']
         xmin, ymin = points[0]
         xmax, ymax = points[1]
-        anchors.append(Anchor(xmin, ymin, xmax, ymax, name=shape['label']))
-    label.anchors = anchors
+        boxes.append(Box(xmin, ymin, xmax, ymax, name=shape['label']))
+    label.boxes = boxes
 
 
 if __name__ == '__main__':
-    JPEG = Path(r'D:\Downloads\Capacitors\archive\Capacitor\Capacitor (1).jpg')
-    MASK = Path(r'D:\Downloads\Capacitors\archive\Capacitor\Capacitor (1).json')
-    label = Label(JPEG, MASK, ['fire'])
-    label.load('labelme')
+    JPEG = Path(r'D:\Downloads\Capacitors\newvoc\train\images\4_295.jpg')
+    MASK = Path(r'D:\Downloads\Capacitors\newvoc\train\labels\4_295.txt')
+    label = Label(JPEG, MASK, ['capacitor'])
+    label.load('yolo')
     label.plt_show()
