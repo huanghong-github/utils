@@ -176,10 +176,10 @@ class ImageDir:
 
 
 def to_yolo(label: Label):
-    target = label.root / "yolo"
-    if not target.exists():
-        target.mkdir_p()
-    target_path = target / f"{label.stem}.txt"
+    target_dir = label.root / "yolo"
+    if not target_dir.exists():
+        target_dir.mkdir_p()
+    target_path = target_dir / f"{label.stem}.txt"
     res = []
     for box in label.boxes:
         center_x = (box.xmin + box.xmax) / 2 / label.width
@@ -216,10 +216,10 @@ def to_voc(label: Label):
     import lxml.builder
     import lxml.etree
 
-    target = label.root / "voc"
-    if not target.exists():
-        target.mkdir_p()
-    target_path = target / f"{label.stem}.xml"
+    target_dir = label.root / "voc"
+    if not target_dir.exists():
+        target_dir.mkdir_p()
+    target_path = target_dir / f"{label.stem}.xml"
     maker = lxml.builder.ElementMaker()
     xml = maker.annotation(
         maker.folder(),
@@ -274,6 +274,40 @@ def from_voc(label: Label):
 
 
 # ----------------------------------labelme------------------------------------
+
+
+def to_labelme(label: Label):
+    import json
+
+    target_dir = label.root / "labelme"
+    if not target_dir.exists():
+        target_dir.mkdir_p()
+    target_path = target_dir / f"{label.stem}.json"
+    shapes = [
+        dict(
+            label=box.name,
+            text="",
+            points=[
+                [box.xmin, box.ymin],
+                [box.xmax, box.ymax],
+            ],
+            group_id=None,
+            shape_type="rectangle",
+            flags={},
+        )
+        for box in label.boxes
+    ]
+    data = dict(
+        version="0.2.23",
+        flags={},
+        shapes=shapes,
+        imagePath=label.image_path,
+        imageData=None,
+        imageHeight=label.height,
+        imageWidth=label.width,
+    )
+
+    json.dump(data, target_path.open("w"), ensure_ascii=False, indent=2)
 
 
 def from_labelme(label: Label):
