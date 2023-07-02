@@ -104,7 +104,7 @@ class ImageDir:
         :param suffix: 图像文件后缀
         :return:
         """
-        externs = [".png", ".jpg", ".jpeg", ".bmp"]
+        externs = [".png", ".jpg", ".jpeg", ".bmp", ".webp", ".jfif"]
         externs.remove(suffix)
         files = [self.img_dir.files(match=f"*{extern}") for extern in externs]
         for im in chain(*files):
@@ -143,7 +143,7 @@ class ImageDir:
 
         return train_files, val_files, test_files, files
 
-    def create_yolo(self):
+    def create_yolo(self, test_size=0.1, test=True):
         """批量创建yolo文件夹"""
 
         def move_files(src_dir: Path, dst_dir: Path, files: List[str]):
@@ -154,7 +154,7 @@ class ImageDir:
         root = self.img_dir.parent
         for x, y in product(("train", "valid", "test"), ("images", "labels")):
             (root / x / y).makedirs_p()
-        train_files, val_files, test_files, _ = self.split_dataset()
+        train_files, val_files, test_files, _ = self.split_dataset(test_size, test)
         move_files(self.img_dir, root / "train" / "images", train_files)
         move_files(root / "yolo", root / "train" / "labels", train_files)
         move_files(self.img_dir, root / "valid" / "images", val_files)
@@ -163,9 +163,9 @@ class ImageDir:
             move_files(self.img_dir, root / "test" / "images", test_files)
             move_files(root / "yolo", root / "test" / "labels", test_files)
 
-    def create_voc(self):
+    def create_voc(self, test_size=0.1, test=True):
         root = self.img_dir.parent
-        train_files, val_files, test_files, _ = self.split_dataset()
+        train_files, val_files, test_files, _ = self.split_dataset(test_size, test)
         (root / "train.txt").write_lines(train_files)
         (root / "valid.txt").write_lines(val_files)
         if test_files:
