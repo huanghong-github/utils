@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from collections import namedtuple
 from itertools import chain, product
 from typing import List
@@ -21,13 +22,11 @@ class Label:
         self.boxes: List[Box] = None
         self.labels: List[str] = labels
 
-    def unload(self, mode="yolo"):
-        func = globals().get(f"to_{mode}")
-        func(self)
+    def unload(self, mode):
+        mode().unload(self)
 
-    def load(self, mode="yolo"):
-        func = globals().get(f"from_{mode}")
-        func(self)
+    def load(self, mode):
+        mode().load(self)
 
     def convert(self, func):
         self.boxes = func(self)
@@ -172,160 +171,172 @@ class ImageDir:
             (root / "test.txt").write_lines(test_files)
 
 
+# ----------------------------------meta--------------------------------------
+
+
+class Meta(ABC):
+    @abstractmethod
+    def unload(self, label):
+        pass
+
+    @abstractmethod
+    def load(self, label):
+        pass
+
+
 # ----------------------------------yolo--------------------------------------
 
 
-def to_yolo(label: Label):
-    target_dir = label.root / "yolo"
-    if not target_dir.exists():
-        target_dir.mkdir_p()
-    target_path = target_dir / f"{label.stem}.txt"
-    res = []
-    for box in label.boxes:
-        center_x = (box.xmin + box.xmax) / 2 / label.width
-        center_y = (box.ymin + box.ymax) / 2 / label.height
-        w = (box.xmax - box.xmin) / label.width
-        h = (box.ymax - box.ymin) / label.height
-        cls = label.labels.index(box.name)
-        res.append(f"{cls:d} {center_x:<08f} {center_y:<08f} {w:<08f} {h:<08f}")
-    target_path.write_lines(res)
+class Yolo(Meta):
+    def unload(self, label: Label):
+        target_dir = label.root / "yolo"
+        if not target_dir.exists():
+            target_dir.mkdir_p()
+        target_path = target_dir / f"{label.stem}.txt"
+        res = []
+        for box in label.boxes:
+            center_x = (box.xmin + box.xmax) / 2 / label.width
+            center_y = (box.ymin + box.ymax) / 2 / label.height
+            w = (box.xmax - box.xmin) / label.width
+            h = (box.ymax - box.ymin) / label.height
+            cls = label.labels.index(box.name)
+            res.append(f"{cls:d} {center_x:<08f} {center_y:<08f} {w:<08f} {h:<08f}")
+        target_path.write_lines(res)
 
-
-def from_yolo(label: Label):
-    boxes = []
-    for line in label.label_path.lines():
-        items = [float(item) for item in line.strip().split()]
-        w = items[3] * label.width
-        h = items[4] * label.height
-        boxes.append(
-            Box(
-                xmin=items[1] * label.width - w / 2,
-                ymin=items[2] * label.height - h / 2,
-                xmax=items[1] * label.width + w / 2,
-                ymax=items[2] * label.height + h / 2,
-                name=label.labels[int(items[0])],
+    def load(self, label: Label):
+        boxes = []
+        for line in label.label_path.lines():
+            items = [float(item) for item in line.strip().split()]
+            w = items[3] * label.width
+            h = items[4] * label.height
+            boxes.append(
+                Box(
+                    xmin=items[1] * label.width - w / 2,
+                    ymin=items[2] * label.height - h / 2,
+                    xmax=items[1] * label.width + w / 2,
+                    ymax=items[2] * label.height + h / 2,
+                    name=label.labels[int(items[0])],
+                )
             )
-        )
-    label.boxes = boxes
+        label.boxes = boxes
 
 
 # -----------------------------------voc--------------------------------------
+class Voc(Meta):
+    def unload(self, label: Label):
+        import lxml.builder
+        import lxml.etree
 
+        target_dir = label.root / "voc"
+        if not target_dir.exists():
+            target_dir.mkdir_p()
+        target_path = target_dir / f"{label.stem}.xml"
+        maker = lxml.builder.ElementMaker()
+        xml = maker.annotation(
+            maker.folder(),
+            maker.filename(label.stem + ".jpg"),
+            maker.source(
+                maker.database(),  # e.g., The VOC2007 Database
+                maker.annotation(),  # e.g., Pascal VOC2007
+                maker.image(),  # e.g., flickr
+            ),
+            maker.size(
+                maker.height(str(label.height)),
+                maker.width(str(label.width)),
+                maker.depth(str(label.depth)),
+            ),
+            maker.segmented(),
+        )
 
-def to_voc(label: Label):
-    import lxml.builder
-    import lxml.etree
-
-    target_dir = label.root / "voc"
-    if not target_dir.exists():
-        target_dir.mkdir_p()
-    target_path = target_dir / f"{label.stem}.xml"
-    maker = lxml.builder.ElementMaker()
-    xml = maker.annotation(
-        maker.folder(),
-        maker.filename(label.stem + ".jpg"),
-        maker.source(
-            maker.database(),  # e.g., The VOC2007 Database
-            maker.annotation(),  # e.g., Pascal VOC2007
-            maker.image(),  # e.g., flickr
-        ),
-        maker.size(
-            maker.height(str(label.height)),
-            maker.width(str(label.width)),
-            maker.depth(str(label.depth)),
-        ),
-        maker.segmented(),
-    )
-
-    for box in label.boxes:
-        xml.append(
-            maker.object(
-                maker.name(box.name),
-                maker.pose(),
-                maker.truncated(),
-                maker.difficult(),
-                maker.bndbox(
-                    maker.xmin(str(box.xmin)),
-                    maker.ymin(str(box.ymin)),
-                    maker.xmax(str(box.xmax)),
-                    maker.ymax(str(box.ymax)),
-                ),
+        for box in label.boxes:
+            xml.append(
+                maker.object(
+                    maker.name(box.name),
+                    maker.pose(),
+                    maker.truncated(),
+                    maker.difficult(),
+                    maker.bndbox(
+                        maker.xmin(str(box.xmin)),
+                        maker.ymin(str(box.ymin)),
+                        maker.xmax(str(box.xmax)),
+                        maker.ymax(str(box.ymax)),
+                    ),
+                )
             )
-        )
-    target_path.write_text(lxml.etree.tostring(xml, pretty_print=True))
+        target_path.write_text(lxml.etree.tostring(xml, pretty_print=True))
 
+    def load(self, label: Label):
+        import lxml.etree
 
-def from_voc(label: Label):
-    import lxml.etree
+        xml = lxml.etree.parse(label.label_path)
 
-    xml = lxml.etree.parse(label.label_path)
+        def to_box(x):
+            return Box(
+                xmin=float(x.find("bndbox").find("xmin").text),
+                ymin=float(x.find("bndbox").find("ymin").text),
+                xmax=float(x.find("bndbox").find("xmax").text),
+                ymax=float(x.find("bndbox").find("ymax").text),
+                name=x.find("name").text,
+            )
 
-    def to_box(x):
-        return Box(
-            xmin=float(x.find("bndbox").find("xmin").text),
-            ymin=float(x.find("bndbox").find("ymin").text),
-            xmax=float(x.find("bndbox").find("xmax").text),
-            ymax=float(x.find("bndbox").find("ymax").text),
-            name=x.find("name").text,
-        )
-
-    objects = filter(lambda o: o.getchildren(), xml.findall("object"))
-    label.boxes = [to_box(o) for o in objects]
+        objects = filter(lambda o: o.getchildren(), xml.findall("object"))
+        label.boxes = [to_box(o) for o in objects]
 
 
 # ----------------------------------labelme------------------------------------
 
 
-def to_labelme(label: Label):
-    import json
+class Labelme(Meta):
+    def unload(self, label: Label):
+        import json
 
-    target_dir = label.root / "labelme"
-    if not target_dir.exists():
-        target_dir.mkdir_p()
-    target_path = target_dir / f"{label.stem}.json"
-    shapes = [
-        dict(
-            label=box.name,
-            text="",
-            points=[
-                [box.xmin, box.ymin],
-                [box.xmax, box.ymax],
-            ],
-            group_id=None,
-            shape_type="rectangle",
+        target_dir = label.root / "labelme"
+        if not target_dir.exists():
+            target_dir.mkdir_p()
+        target_path = target_dir / f"{label.stem}.json"
+        shapes = [
+            dict(
+                label=box.name,
+                text="",
+                points=[
+                    [box.xmin, box.ymin],
+                    [box.xmax, box.ymax],
+                ],
+                group_id=None,
+                shape_type="rectangle",
+                flags={},
+            )
+            for box in label.boxes
+        ]
+        data = dict(
+            version="0.2.23",
             flags={},
+            shapes=shapes,
+            imagePath=label.image_path,
+            imageData=None,
+            imageHeight=label.height,
+            imageWidth=label.width,
         )
-        for box in label.boxes
-    ]
-    data = dict(
-        version="0.2.23",
-        flags={},
-        shapes=shapes,
-        imagePath=label.image_path,
-        imageData=None,
-        imageHeight=label.height,
-        imageWidth=label.width,
-    )
 
-    json.dump(data, target_path.open("w"), ensure_ascii=False, indent=2)
+        json.dump(data, target_path.open("w"), ensure_ascii=False, indent=2)
 
+    def load(self, label: Label):
+        import json
 
-def from_labelme(label: Label):
-    import json
-
-    data = json.loads(label.label_path.read_text())
-    boxes = []
-    for shape in data["shapes"]:
-        points = shape["points"]
-        xmin, ymin = points[0]
-        xmax, ymax = points[1]
-        boxes.append(Box(xmin, ymin, xmax, ymax, name=shape["label"]))
-    label.boxes = boxes
+        data = json.loads(label.label_path.read_text())
+        boxes = []
+        for shape in data["shapes"]:
+            points = shape["points"]
+            xmin, ymin = points[0]
+            xmax, ymax = points[1]
+            boxes.append(Box(xmin, ymin, xmax, ymax, name=shape["label"]))
+        label.boxes = boxes
 
 
 if __name__ == "__main__":
-    JPEG = Path(r"D:\Downloads\Capacitors\newvoc\train\images\4_295.jpg")
-    MASK = Path(r"D:\Downloads\Capacitors\newvoc\train\labels\4_295.txt")
-    label = Label(JPEG, MASK, ["capacitor"])
-    label.load("yolo")
+    JPEG = Path(r"D:\dataset\fire\smoke\train\images\a0.jpg")
+    MASK = Path(r"D:\dataset\fire\smoke\train\labels\a0.txt")
+    label = Label(JPEG, MASK, ["fire", "smoke"])
+    label.load(Yolo)
     label.plt_show()
+    label.unload(Voc)

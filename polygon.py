@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from collections import namedtuple
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -28,18 +29,12 @@ class Label:
         self.height, self.width, self.depth = self.img.shape
         self.polygons: List[Polygon] = None
         self.labels: List[str] = labels
-        self.voc_labels = ["background"] + list(labels)
 
-    def unload(self, mode="yolo"):
-        func = globals().get(f"to_{mode}")
-        func(self)
+    def unload(self, mode):
+        mode().unload(self)
 
-    def load(self, mode="yolo", **kwargs):
-        func = globals().get(f"from_{mode}")
-        func(self, **kwargs)
-
-    def convert(self, func):
-        self.polygons = func(self)
+    def load(self, mode, **kwargs):
+        mode().load(self, **kwargs)
 
     def cv_line_show(self):
         import cv2
@@ -98,11 +93,12 @@ class Label:
         plt.show()
 
     def viz_cls_show(self):
-        cls, _ = shapes_to_label(self)
+        """类别可视化"""
+        cls, _ = Voc.shapes_to_label(self)
         clsv = imgviz.label2rgb(
             cls,
             imgviz.rgb2gray(cv2.cvtColor(self.img, cv2.COLOR_BGR2RGB)),
-            label_names=self.voc_labels,
+            label_names=["background"] + list(self.labels),
             font_size=15,
             loc="rb",
         )
@@ -110,7 +106,8 @@ class Label:
         plt.show()
 
     def viz_ins_show(self):
-        _, ins = shapes_to_label(self)
+        """实例可视化"""
+        _, ins = Voc.shapes_to_label(self)
         instance_ids = np.unique(ins)
         instance_names = [str(i) for i in range(max(instance_ids) + 1)]
         insv = imgviz.label2rgb(
@@ -124,136 +121,151 @@ class Label:
         plt.show()
 
 
+# ----------------------------------meta--------------------------------------
+
+
+class Meta(ABC):
+    @abstractmethod
+    def unload(self, label):
+        pass
+
+    @abstractmethod
+    def load(self, label):
+        pass
+
+
 # ----------------------------------yolo--------------------------------------
 
 
-def to_yolo(label: Label):
-    target = label.root / "yolo"
-    if not target.exists():
-        target.mkdir_p()
-    target_path = target / f"{label.stem}.txt"
-    res = []
-    for polygon in label.polygons:
-        cls = label.labels.index(polygon.name)
-        xy += " ".join(
-            f"{x/label.width:<08f} {y/label.height:<08f}" for x, y in polygon.Coords
-        )
-        res.append(f"{cls:d} {xy}")
-    target_path.write_lines(res)
+class Yolo(Meta):
+    def unload(self, label: Label):
+        target = label.root / "yolo"
+        if not target.exists():
+            target.mkdir_p()
+        target_path = target / f"{label.stem}.txt"
+        res = []
+        for polygon in label.polygons:
+            cls = label.labels.index(polygon.name)
+            xy = " ".join(
+                f"{x/label.width:<08f} {y/label.height:<08f}" for x, y in polygon.Coords
+            )
+            res.append(f"{cls:d} {xy}")
+        target_path.write_lines(res)
 
-
-def from_yolo(label: Label):
-    polygons = []
-    for line in label.label_path.lines():
-        items = [float(item) for item in line.strip().split()]
-        name = label.labels[int(items[0])]
-        Coords = [
-            Coord(items[i] * label.width, items[i + 1] * label.height)
-            for i in range(1, len(items), 2)
-        ]
-        polygons.append(Polygon(Coords, name))
-    label.polygons = polygons
+    def load(self, label: Label):
+        polygons = []
+        for line in label.label_path.lines():
+            items = [float(item) for item in line.strip().split()]
+            name = label.labels[int(items[0])]
+            Coords = [
+                Coord(items[i] * label.width, items[i + 1] * label.height)
+                for i in range(1, len(items), 2)
+            ]
+            polygons.append(Polygon(Coords, name))
+        label.polygons = polygons
 
 
 # -----------------------------------voc--------------------------------------
 
 
-def shapes_to_label(label: Label):
-    import uuid
+class Voc(Meta):
+    @staticmethod
+    def shapes_to_label(label: Label):
+        cls = np.zeros([label.height, label.width], dtype=np.int32)
+        ins = np.zeros_like(cls)
 
-    cls = np.zeros([label.height, label.width], dtype=np.int32)
-    ins = np.zeros_like(cls)
-    instances = []
-    for polygon in label.polygons:
-        cls_name = polygon.name
-        instance = (cls_name, uuid.uuid1())
+        for idx, polygon in enumerate(label.polygons):
+            cls_name = polygon.name
 
-        if instance not in instances:
-            instances.append(instance)
-        ins_id = instances.index(instance) + 1
-        cls_id = label.voc_labels.index(cls_name)
+            ins_id = idx + 1
+            cls_id = (["background"] + list(label.labels)).index(cls_name)
 
-        mask = np.zeros([label.height, label.width], dtype=np.uint8)
-        mask = Image.fromarray(mask)
-        draw = ImageDraw.Draw(mask)
-        xy = [Coord(*map(int, coord)) for coord in polygon.Coords]
-        draw.polygon(xy=xy, fill=1, outline=1)
-        mask = np.array(mask, dtype=bool)
+            mask = np.zeros([label.height, label.width], dtype=np.uint8)
+            mask = Image.fromarray(mask)
+            draw = ImageDraw.Draw(mask)
+            xy = [Coord(*map(int, coord)) for coord in polygon.Coords]
+            draw.polygon(xy=xy, fill=1, outline=1)
+            mask = np.array(mask, dtype=bool)
 
-        cls[mask] = cls_id
-        ins[mask] = ins_id
-    return cls, ins
+            cls[mask] = cls_id
+            ins[mask] = ins_id
+        return cls, ins
 
+    def lblsave(self, filename, lbl):
+        # Assume label ranses [-1, 254] for int32,
+        # and [0, 255] for uint8 as VOC.
+        if lbl.min() >= -1 and lbl.max() < 255:
+            lbl_pil = Image.fromarray(lbl.astype(np.uint8), mode="P")
+            colormap = imgviz.label_colormap()
+            lbl_pil.putpalette(colormap.flatten())
+            lbl_pil.save(filename)
+        else:
+            raise ValueError(
+                "[%s] Cannot save the pixel-wise class label as PNG. "
+                "Please consider using the .npy format." % filename
+            )
 
-def lblsave(filename, lbl):
-    # Assume label ranses [-1, 254] for int32,
-    # and [0, 255] for uint8 as VOC.
-    if lbl.min() >= -1 and lbl.max() < 255:
-        lbl_pil = Image.fromarray(lbl.astype(np.uint8), mode="P")
-        colormap = imgviz.label_colormap()
-        lbl_pil.putpalette(colormap.flatten())
-        lbl_pil.save(filename)
-    else:
-        raise ValueError(
-            "[%s] Cannot save the pixel-wise class label as PNG. "
-            "Please consider using the .npy format." % filename
-        )
+    def unload(self, label: Label):
+        cls_dir = label.root / "voc/Segmentation"
+        if not cls_dir.exists():
+            cls_dir.makedirs_p()
+        ins_dir = label.root / "voc/SegmentationObject"
+        if not ins_dir.exists():
+            ins_dir.makedirs_p()
 
+        cls, ins = self.shapes_to_label(label)
+        self.lblsave(cls_dir / f"{label.stem}.png", cls)
+        self.lblsave(ins_dir / f"{label.stem}.png", ins)
 
-def to_voc(label: Label):
-    cls_dir = label.root / "voc/Segmentation"
-    if not cls_dir.exists():
-        cls_dir.makedirs_p()
-    ins_dir = label.root / "voc/SegmentationObject"
-    if not ins_dir.exists():
-        ins_dir.makedirs_p
+    def load(
+        self,
+        label: Label,
+        convertDict: Dict[Tuple[int, int, int], str],
+        min_points: int = 20,
+        stride: int = 10,
+    ):
+        """
+        # convertDict: 转换字典,如{(255, 0, 0): "capacitor"},像素对应标签
+        # min_points: polygon的最小点数,小于的全部放弃
+        # stride: 步长,轮廓取点很密集,可以用步长降低点数
+        """
+        from skimage import measure
 
-    cls, ins = shapes_to_label(label)
-    lblsave(cls_dir / f"{label.stem}.png", cls)
-    lblsave(ins_dir / f"{label.stem}.png", ins)
-
-
-def from_voc(
-    label: Label,
-    convertDict: Dict[Tuple[int, int, int], str],
-    min_points: int = 20,
-    stride: int = 10,
-):
-    """
-    # convertDict: 转换字典,如{(255, 0, 0): "capacitor"},像素对应标签
-    # min_points: polygon的最小点数,小于的全部放弃
-    # stride: 步长,轮廓取点很密集,可以用步长降低点数
-    """
-    from skimage import measure
-
-    mask = cv2.imread(label.label_path)
-    mask = cv2.cvtColor(mask, cv2.COLOR_BGR2RGB)
-    polygons = []
-    for color, name in convertDict.items():
-        mask_c = mask == color
-        mask_c = mask_c[:, :, 0] & mask_c[:, :, 1] & mask_c[:, :, 2]
-        contours = measure.find_contours(mask_c, 0.5)
-        for contour in contours:
-            if len(contour) > min_points:
-                polygons.append(Polygon(np.flip(contour)[::stride], name))
-    label.polygons = polygons
+        mask = cv2.imread(label.label_path)
+        mask = cv2.cvtColor(mask, cv2.COLOR_BGR2RGB)
+        polygons = []
+        for color, name in convertDict.items():
+            mask_c = mask == color
+            mask_c = mask_c[:, :, 0] & mask_c[:, :, 1] & mask_c[:, :, 2]
+            contours = measure.find_contours(mask_c, 0.5)
+            for contour in contours:
+                if len(contour) > min_points:
+                    polygons.append(Polygon(np.flip(contour)[::stride], name))
+        label.polygons = polygons
 
 
 # ----------------------------------labelme------------------------------------
 
 
-def from_labelme(label: Label):
-    import json
+class Labelme(Meta):
+    def load(self, label: Label):
+        import json
 
-    data = json.loads(label.label_path.read_text())
-    label.polygons = [
-        Polygon(Coords=shape["points"], name=shape["label"]) for shape in data["shapes"]
-    ]
+        data = json.loads(label.label_path.read_text())
+        label.polygons = [
+            Polygon(Coords=shape["points"], name=shape["label"])
+            for shape in data["shapes"]
+        ]
+
+    def unload(self, label: Label):
+        # TODO
+        pass
 
 
 if __name__ == "__main__":
     JPEG = Path(r"D:\dataset\Capacitors\newvoc\train\images\1_1.jpg")
     MASK = Path(r"D:\dataset\Capacitors\newvoc\Segmentation\1_1.png")
     label = Label(JPEG, MASK, ["capacitor"])
-    label.load("voc", convertDict={(255, 0, 0): "capacitor"}, min_points=100)
+    label.load(Voc, convertDict={(255, 0, 0): "capacitor"}, min_points=100)
+    label.unload(Yolo)
     label.viz_cls_show()
